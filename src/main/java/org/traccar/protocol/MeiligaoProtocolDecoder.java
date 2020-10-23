@@ -145,6 +145,7 @@ public class MeiligaoProtocolDecoder extends BaseProtocolDecoder {
     public static final int MSG_TRACK_BY_INTERVAL = 0x4102;
     public static final int MSG_MOVEMENT_ALARM = 0x4106;
     public static final int MSG_OUTPUT_CONTROL = 0x4115;
+    public static final int MSG_OUTPUT_CONTROL_ALT = 0x5100;
     public static final int MSG_TIME_ZONE = 0x4132;
     public static final int MSG_TAKE_PHOTO = 0x4151;
     public static final int MSG_UPLOAD_PHOTO = 0x0800;
@@ -220,8 +221,9 @@ public class MeiligaoProtocolDecoder extends BaseProtocolDecoder {
                 return Position.ALARM_GEOFENCE_ENTER;
             case 0x14:
                 return Position.ALARM_ACCIDENT;
+            case 0x00:
             case 0x50:
-                return Position.ALARM_POWER_OFF;
+                return Position.ALARM_POWER_CUT;
             case 0x53:
                 return Position.ALARM_GPS_ANTENNA_CUT;
             case 0x72:
@@ -473,6 +475,12 @@ public class MeiligaoProtocolDecoder extends BaseProtocolDecoder {
                 } finally {
                     photo.release();
                 }
+            } else if (command == MSG_OUTPUT_CONTROL || command == MSG_OUTPUT_CONTROL_ALT) {
+                getLastLocation(position, null);
+                position.setFixTime(position.getDeviceTime());
+                String result = String.valueOf(buf.readUnsignedByte());
+                position.set(Position.KEY_RESULT, result);
+                return position;
             }
 
             String sentence = buf.toString(buf.readerIndex(), buf.readableBytes() - 4, StandardCharsets.US_ASCII);
