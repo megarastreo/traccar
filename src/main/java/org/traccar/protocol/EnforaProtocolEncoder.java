@@ -34,10 +34,11 @@ public class EnforaProtocolEncoder extends StringProtocolEncoder {
 
         ByteBuf buf = Unpooled.buffer();
 
-        buf.writeShort(content.length() + 6);
+        buf.writeShort(content.length() + 7);
         buf.writeShort(0); // index
         buf.writeByte(0x04); // command type
         buf.writeByte(0); // optional header
+        buf.writeByte(0);
         buf.writeBytes(content.getBytes(StandardCharsets.US_ASCII));
 
         return buf;
@@ -48,10 +49,12 @@ public class EnforaProtocolEncoder extends StringProtocolEncoder {
         switch (command.getType()) {
             case Command.TYPE_CUSTOM:
                 return encodeContent(command.getString(Command.KEY_DATA));
+            case Command.TYPE_POSITION_SINGLE:
+                return encodeContent("AT$TTTRGEV=18,1,25");
             case Command.TYPE_ENGINE_STOP:
-                return encodeContent("AT$IOGP3=1");
+                return encodeContent("AT$TTIOCO5=1");
             case Command.TYPE_ENGINE_RESUME:
-                return encodeContent("AT$IOGP3=0");
+                return encodeContent("AT$TTIOCO5=0");
             default:
                 return null;
         }

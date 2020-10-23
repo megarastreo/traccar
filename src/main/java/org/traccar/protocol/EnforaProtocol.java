@@ -26,6 +26,7 @@ public class EnforaProtocol extends BaseProtocol {
     public EnforaProtocol() {
         setSupportedDataCommands(
                 Command.TYPE_CUSTOM,
+                Command.TYPE_POSITION_SINGLE,
                 Command.TYPE_ENGINE_STOP,
                 Command.TYPE_ENGINE_RESUME);
         addServer(new TrackerServer(false, getName()) {
