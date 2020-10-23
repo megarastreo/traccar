@@ -2,6 +2,7 @@ package org.traccar.protocol;
 
 import org.junit.Test;
 import org.traccar.ProtocolTest;
+import org.traccar.model.Position;
 
 public class EnforaProtocolDecoderTest extends ProtocolTest {
 
@@ -9,6 +10,13 @@ public class EnforaProtocolDecoderTest extends ProtocolTest {
     public void testDecode() throws Exception {
 
         EnforaProtocolDecoder decoder = new EnforaProtocolDecoder(null);
+
+        verifyPosition(decoder, binary(
+                "000402100020202020202020202031302020202020203836313037343032313539353837342020202020343539202020202030202020202d34204750524d432c3231313530372e30302c412c313032322e37383136362c4e2c30373532392e30313031332c572c302e3030302c302e302c3035303431392c2c2c442a343520203238202020202034333131333932202020202034333131343734203132333933"),
+                position("2019-04-05 21:15:07.000", true, 10.3796943, -75.4835022));
+        
+        verifyAttribute(decoder, binary(
+                "000d00000500000d0a4f4b0d0a"), Position.KEY_RESULT, "OK");
 
         verifyNull(decoder, binary(
                 "000A08002020202020303131303730303030353730323637"));

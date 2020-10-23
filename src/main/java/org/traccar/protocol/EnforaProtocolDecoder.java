@@ -29,6 +29,7 @@ import org.traccar.model.Position;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
+import org.traccar.helper.BitUtil;
 
 public class EnforaProtocolDecoder extends BaseProtocolDecoder {
 
@@ -37,7 +38,12 @@ public class EnforaProtocolDecoder extends BaseProtocolDecoder {
     }
 
     private static final Pattern PATTERN = new PatternBuilder()
-            .text("GPRMC,")
+            .number("\\s*(d+)")                  // event
+            .number("\\s*(d{15})")               // imei
+            .number("\\s*(d*)")                  // in outs
+            .number("\\s*(-?d*)")                // AD1 (divide by 1000)
+            .number("\\s*(-?d*)")                // AD2 (divide by 1000)
+            .expression(" \\$?GPRMC,")
             .number("(dd)(dd)(dd).?d*,")         // time (hhmmss)
             .expression("([AV]),")               // validity
             .number("(dd)(dd.d+),")              // latitude
@@ -47,10 +53,59 @@ public class EnforaProtocolDecoder extends BaseProtocolDecoder {
             .number("(d+.d+)?,")                 // speed
             .number("(d+.d+)?,")                 // course
             .number("(dd)(dd)(dd),")             // date (ddmmyy)
+            .number("(-?d*),").optional()        // altitude
+            .number("(-?d*),").optional()        // satelites
+            .expression("[^*]*\\*\\d+")          // checksum
+            .number("\\s*(d{2})").optional()     // battery percent
+            .number("\\s*(d*)")                  // virtual odometer
+            .number("\\s*(d*)")                  // gps odometer
+            .number("\\s*(d{5})").optional()     // battery voltage (divide by 1000)
             .any()
             .compile();
 
     public static final int IMEI_LENGTH = 15;
+
+    private String decodeAlarm(int value) {
+        switch (value) {
+            case 12:
+                return Position.ALARM_SOS;
+            case 14:
+                return Position.ALARM_POWER_CUT;
+            case 15:
+                return Position.ALARM_POWER_RESTORED;
+            case 17:
+                return Position.ALARM_POWER_OFF;
+            case 18:
+                return Position.ALARM_POWER_ON;
+            case 19:
+                return Position.ALARM_GPS_ANTENNA_CUT;
+            case 40:
+                return Position.ALARM_OVERSPEED;
+            case 91:
+                return Position.ALARM_BRAKING;
+            case 92:
+                return Position.ALARM_ACCELERATION;
+            default:
+                return null;
+        }
+    }
+
+    private Position decodeResult(Channel channel, SocketAddress remoteAddress, ByteBuf buf) {
+        DeviceSession deviceSession = getDeviceSession(channel, remoteAddress);
+        if (deviceSession == null) {
+            return null;
+        }
+        Position position = new Position(getProtocolName());
+        position.setDeviceId(deviceSession.getDeviceId());
+        getLastLocation(position, null);
+        position.setFixTime(position.getDeviceTime());
+
+        buf.skipBytes(9);
+        String result = buf.toString(buf.readerIndex(), buf.readableBytes() - 2, StandardCharsets.US_ASCII);
+        position.set(Position.KEY_RESULT, result);
+
+        return position;
+    }
 
     @Override
     protected Object decode(
@@ -58,44 +113,48 @@ public class EnforaProtocolDecoder extends BaseProtocolDecoder {
 
         ByteBuf buf = (ByteBuf) msg;
 
-        // Find IMEI number
-        int index = -1;
-        for (int i = buf.readerIndex(); i < buf.writerIndex() - IMEI_LENGTH; i++) {
-            index = i;
-            for (int j = i; j < i + IMEI_LENGTH; j++) {
-                if (!Character.isDigit((char) buf.getByte(j))) {
-                    index = -1;
-                    break;
-                }
-            }
-            if (index > 0) {
-                break;
-            }
+        if (BufferUtil.indexOf("OK", buf) != -1 || BufferUtil.indexOf("ERROR", buf) != -1) {
+            return decodeResult(channel, remoteAddress, buf);
         }
-        if (index == -1) {
+
+        String sentence = buf.toString(7, buf.readableBytes() - 7, StandardCharsets.US_ASCII);
+        Parser parser = new Parser(PATTERN, sentence);
+
+        if (!parser.matches()) {
             return null;
         }
 
-        String imei = buf.toString(index, IMEI_LENGTH, StandardCharsets.US_ASCII);
+        int event = parser.nextInt(0);
+
+        String imei = parser.next();
         DeviceSession deviceSession = getDeviceSession(channel, remoteAddress, imei);
         if (deviceSession == null) {
             return null;
         }
 
-        // Find NMEA sentence
-        int start = BufferUtil.indexOf("GPRMC", buf);
-        if (start == -1) {
-            return null;
-        }
-
-        String sentence = buf.toString(start, buf.readableBytes() - start, StandardCharsets.US_ASCII);
-        Parser parser = new Parser(PATTERN, sentence);
-        if (!parser.matches()) {
-            return null;
-        }
-
         Position position = new Position(getProtocolName());
         position.setDeviceId(deviceSession.getDeviceId());
+
+        if (event == 10 || event == 11) {
+            position.set(Position.KEY_IGNITION, event == 10);
+        } else if (event > 0) {
+            position.set(Position.KEY_ALARM, decodeAlarm(event));
+        }
+
+        if (parser.hasNext()) {
+            int status = parser.nextInt();
+            for (int i = 1; i <= 9; i++) {
+                position.set(Position.PREFIX_IO + i, BitUtil.check(status, i - 1));
+            }
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.PREFIX_ADC + 1, parser.nextInt() * 0.001);
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.PREFIX_ADC + 2, parser.nextInt()  * 0.001);
+        }
 
         DateBuilder dateBuilder = new DateBuilder()
                 .setTime(parser.nextInt(0), parser.nextInt(0), parser.nextInt(0));
@@ -108,6 +167,30 @@ public class EnforaProtocolDecoder extends BaseProtocolDecoder {
 
         dateBuilder.setDateReverse(parser.nextInt(0), parser.nextInt(0), parser.nextInt(0));
         position.setTime(dateBuilder.getDate());
+
+        if (parser.hasNext()) {
+            position.setAltitude(parser.nextDouble());
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.KEY_SATELLITES, parser.nextInt());
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.KEY_BATTERY_LEVEL, parser.nextInt());
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.KEY_ODOMETER_TRIP, parser.nextInt());
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.KEY_ODOMETER, parser.nextInt());
+        }
+
+        if (parser.hasNext()) {
+            position.set(Position.KEY_POWER, parser.nextInt() * 0.001);
+        }
 
         return position;
     }
